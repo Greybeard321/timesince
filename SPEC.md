@@ -1,17 +1,17 @@
 # TimeSince — App Specification
 
-**Status:** v1.1 — confirmed · **Date:** 2026-11-24
+**Status:** v1.2 — confirmed · **Date:** 2026-11-24
 
 ## 1. Summary
 
-A small, offline Android app that stores a list of things with a start date and shows, for each one, how much time has passed since that date. No accounts, no sync, no notifications — just a list, a date-aware "time since" label, and manual backup/restore via a database file.
+A small, offline Android app that stores a list of things with a start date and shows, for each one, how much time has passed since that date. No accounts, no sync, no notifications — just a list, a date-aware "time since" label, and manual backup/restore via a human-readable CSV file.
 
 ## 2. Goals
 
 - Add, view, edit and remove items with a **title** and a **start date**.
 - See elapsed time per item in **years / months / days**, not just a raw day count.
 - Work entirely on-device, including offline.
-- Back up and restore all items by exporting/importing the local database as a file.
+- Back up and restore all items by exporting/importing a **CSV file**.
 - Be simple enough to build and maintain as a first small Android app.
 
 ### Non-goals
@@ -19,6 +19,7 @@ A small, offline Android app that stores a list of things with a start date and 
 - Cloud sync, automatic backup, sharing services or accounts.
 - Categories, tags, sorting controls, search, reminders or widgets.
 - Time-of-day precision; all dates are calendar dates only.
+- Binary database exports, encrypted/password-protected files, and non-CSV formats.
 
 ## 3. Main screen
 
@@ -62,29 +63,48 @@ Contents:
 
 - The top-left three-dot menu opens a dropdown/popup menu with **Import**, **Export** and **About**, in that order.
 - Dismissing the menu by tapping outside or pressing Back performs no action.
+- Import/Export menu items are disabled while an import or export is running.
 
 ### 5.2 Export
 
 - Tapping **Export** opens the Android system file picker to choose a destination (Storage Access Framework `ACTION_CREATE_DOCUMENT`).
-- Suggested filename: `timesince-YYYY-MM-DD.db`, with `.db` as the default extension.
-- The app writes a consistent snapshot of the Room/SQLite database to the chosen destination as a single plain `.db` file.
+- Suggested filename: `timesince-YYYY-MM-DD.csv`, MIME type `text/csv`.
+- The app writes a single **UTF-8 CSV** file containing all items, in the same order as the list: oldest start date first.
+- CSV format:
+  - Header row: `title,startDate`.
+  - One row per item.
+  - `startDate` uses ISO format `YYYY-MM-DD`.
+  - Fields containing commas, quotes, or line breaks are quoted and escaped using standard CSV rules.
+  - Internal database IDs are not exported; they are regenerated on import.
+- Example:
+
+  ```csv
+  title,startDate
+  Anniversary,2020-06-15
+  "Moved house, new city",2024-03-01
+  Coffee,2026-11-24
+  ```
+
 - No storage permission is required; the user chooses where the file is saved.
 - Cancelling the picker leaves the app unchanged.
-- On success, show a short confirmation such as "Database exported".
-- On failure (e.g. cannot write file), show an error message; the local database remains unchanged.
+- On success, show a short confirmation such as "CSV exported".
+- On failure (e.g. cannot write file), show an error message; the local data remains unchanged.
 
 ### 5.3 Import
 
-- Tapping **Import** opens the Android system file picker to choose a `.db` file (Storage Access Framework `ACTION_OPEN_DOCUMENT`).
-- Import is a **restore/replace operation**: the selected file becomes the app's database (proposed; alternative would be merge/upsert).
+- Tapping **Import** opens the Android system file picker to choose a CSV file (Storage Access Framework `ACTION_OPEN_DOCUMENT`, filtered to text files).
+- Import is a **restore/replace operation**: the imported rows replace all current items (confirmed). There is no merge/upsert in v1.
 - Before replacing data, show a confirmation warning that current items will be replaced by the imported file. Cancelling leaves the app unchanged.
 - The selected file is validated before replacement:
-  - it must be a readable SQLite database,
-  - it must have the expected TimeSince schema/version,
-  - it must not be corrupt.
-- If validation fails, show an error and leave the current database untouched.
-- On success, replace the local database, refresh the list, and show a short confirmation such as "Database imported".
-- Importing a database from a future/incompatible app version is rejected; v1 does not include schema migrations for imported files.
+  - it must be readable UTF-8 text,
+  - its first row must be the expected header `title,startDate` (case-insensitive),
+  - each data row must have exactly two columns,
+  - every title must be non-blank after trimming,
+  - every date must be a valid ISO `YYYY-MM-DD` calendar date,
+  - no date may be in the future.
+- If validation fails, show an error and leave the current items untouched.
+- On success, replace all items in a single Room transaction, refresh the list, and show a short confirmation such as "CSV imported".
+- Importing a file with an unknown/incompatible header is rejected; v1 does not include CSV format migrations.
 
 ### 5.4 About dialog
 
@@ -97,21 +117,21 @@ Contents:
 
 ```kotlin
 data class Item(
-    val id: Long = 0,            // generated by the database
-    val title: String,           // required, trimmed
-    val startDate: LocalDate     // calendar date, no time zone
+    val id: Long = 0,                  // generated by the database
+    val title: String,                 // required, trimmed
+    val startDateEpochDay: Long,       // stored as days since 1970-01-01
 )
 ```
 
-- Stored locally in a single table (Room/SQLite).
-- One-off, automatic migration not needed for v1; schema is fixed.
+- Stored locally in a single Room/SQLite table.
 - State survives rotation and process death.
-- The database file is the unit of import/export; exported files contain the whole database, not individual items.
+- The CSV file is the unit of import/export; it contains item data, not the raw SQLite database.
+- Database IDs are internal and are not part of the CSV format.
 
 ## 7. Elapsed-time rules
 
 - "Today" is the device's current local calendar date.
-- Elapsed time is **calendar-based**, not a fixed 365-day year: whole years, then whole months, then whole days are calculated between the start date and today (equivalent to `Period.between(startDate, today)`).
+- Elapsed time is **calendar-based**, not a fixed 365-day year: whole years, then whole months, then whole days are calculated between the start date and today (equivalent to `Period.between(start, today)`).
 - Display format (confirmed):
   - Primary: compact units, omitting zeros — `6y 5m 8d`, `3m 2d`, `10d`, `0d` (same day: `Today`).
   - Secondary: exact total day count — `2,352 days total`.
@@ -124,26 +144,31 @@ data class Item(
 - Device clock/time zone changes → elapsed values recalculated from the current local date whenever the list is shown.
 - Locale → date and number formatting follow device settings; the compact `y/m/d` abbreviations stay language-neutral in v1.
 - Rapid taps / duplicate submissions → a new item is created only once per `[Add]` tap.
-- Export of an empty database produces a valid file with zero items.
+- Export of an empty list produces a valid header-only CSV file.
 - Import/export picker cancellation → no data change.
-- Corrupt, non-SQLite, wrong-schema or incompatible-version import file → error message; current data unchanged.
+- Titles containing commas, quotes, or line breaks are escaped on export and restored on import.
+- Malformed CSV, wrong header, wrong column count, blank titles, invalid dates, or future dates → error message; current data unchanged.
 - Import replacement confirmation dismissed → no data change.
 - External storage unavailable or write failure → export fails gracefully with an error; local data unchanged.
-- The database must be closed/checkpointed before export and cleanly reopened after import so the app never continues against a stale file handle.
+- Import replaces all items in one Room transaction; no stale database file handles are involved.
 
-## 9. Technical approach (proposed)
+## 9. Technical approach
 
 - **Language / UI:** Kotlin + Jetpack Compose with Material 3, single Activity, no fragments.
 - **Persistence:** Room (one `Item` entity, DAO, database). No network layer.
 - **State:** `ViewModel` exposing a `StateFlow` of items; Compose collects it and renders the list.
-- **Dates:** `java.time.LocalDate` (minSdk 26, or enable core library desugaring if supporting older devices).
+- **Dates:** `java.time.LocalDate` (minSdk 26).
 - **File access:** Android Storage Access Framework (`ACTION_CREATE_DOCUMENT` for export, `ACTION_OPEN_DOCUMENT` for import); no broad storage permission.
-- **Import/export implementation:** export a consistent SQLite snapshot; for import, validate the selected file and schema before replacing `timesince.db`, then close/reopen Room and refresh all observed state.
+- **Import/export implementation:**
+  - A pure `CsvSerializer` encodes/decodes `title,startDate` CSV with ISO dates.
+  - Export reads a one-shot DAO snapshot, serializes it, and writes UTF-8 text to the chosen URI.
+  - Import copies the selected URI to a temporary file, validates and parses it before any mutation, then replaces all rows in a single Room transaction.
 - **Structure:** single module, roughly:
   - `data/` — entity, DAO, database
   - `ui/` — list screen, item row, editor popup, About dialog
   - `util/ElapsedFormatter.kt` — pure date-to-label logic
-- **Dependencies:** AndroidX only (Compose, Activity Compose, Lifecycle, Room, Material Icons).
+  - `util/CsvSerializer.kt` — pure CSV encode/decode and validation
+- **Dependencies:** AndroidX only (Compose, Activity Compose, Lifecycle, Room, Material Icons). No CSV library needed.
 
 ## 10. Acceptance criteria
 
@@ -157,10 +182,10 @@ data class Item(
 8. **Given** the popup, **when** I tap `[Remove]` and confirm, **then** the item disappears and stays deleted after a restart; cancelling the confirmation leaves it in place.
 9. **Given** the app is backgrounded across local midnight, **when** it resumes, **then** all elapsed labels are recalculated for the new date.
 10. **Given** the main screen, **when** I tap the top-left `...` menu, **then** a menu opens with **Import**, **Export** and **About** in that order.
-11. **Given** the menu, **when** I tap **Export** and choose a destination, **then** a `.db` file containing the current database is written and a success message is shown; the current list is unchanged.
+11. **Given** the menu, **when** I tap **Export** and choose a destination, **then** a `.csv` file with header `title,startDate` and one ISO-dated row per item is written, a success message is shown, and the current list is unchanged.
 12. **Given** the export file picker, **when** I cancel, **then** no file is written and no data changes.
-13. **Given** the menu, **when** I tap **Import**, choose a valid compatible `.db` file and confirm replacement, **then** the imported items are shown and remain after restarting the app.
-14. **Given** a corrupt, non-SQLite, wrong-schema or incompatible-version import file, **when** I attempt to import it, **then** an error is shown and existing data remains unchanged.
+13. **Given** the menu, **when** I tap **Import**, choose a valid compatible `.csv` file and confirm replacement, **then** the imported items are shown and remain after restarting the app.
+14. **Given** a malformed, wrong-header, invalid-date, or future-date import file, **when** I attempt to import it, **then** an error is shown and existing items remain unchanged.
 15. **Given** the import confirmation or file picker, **when** I cancel, **then** no data changes.
 16. **Given** the menu, **when** I tap **About**, **then** a dialog shows the application name **TimeSince** and version **1.0** with a **Close** button.
 
@@ -171,14 +196,15 @@ data class Item(
 3. **Future dates:** rejected; the date field defaults to today.
 4. **Elapsed display:** compact `6y 5m 8d` plus exact total days.
 5. **Deletion:** confirmation dialog, no undo snackbar.
-6. **Minimum Android version:** minSdk 26 (as proposed in §9), unless changed later.
-
-7. **Import semantics:** replace the current database with the imported file; no merge/upsert in v1.
-8. **Export filename:** `timesince-YYYY-MM-DD.db` by default.
+6. **Minimum Android version:** minSdk 26.
+7. **Import semantics:** replace all current items with the imported rows; no merge/upsert in v1.
+8. **Export filename:** `timesince-YYYY-MM-DD.csv` by default.
+9. **Export format:** human-readable CSV with header `title,startDate` and ISO `YYYY-MM-DD` dates.
 
 ## 12. Out of scope for v1
 
 - Sorting options, search, filters, categories or colours per item.
 - Notifications, widgets, shortcuts, cloud sync or automatic backup.
-- Merging imported data with existing data, encrypted/password-protected exports, or non-`.db` export formats.
+- Merging imported data with existing data.
+- Binary database exports, encrypted/password-protected exports, XML/JSON exports, or other non-CSV formats.
 - Editing the app's theme beyond Material 3 defaults; languages beyond system-provided ones.

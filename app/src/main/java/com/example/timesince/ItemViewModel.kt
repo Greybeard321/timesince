@@ -2,16 +2,14 @@ package com.example.timesince
 
 import android.app.Application
 import android.content.Context
-import android.database.sqlite.SQLiteDatabase
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.timesince.data.AppDatabase
 import com.example.timesince.data.Item
 import com.example.timesince.data.ItemDao
+import com.example.timesince.util.CsvSerializer
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -30,9 +28,7 @@ import java.time.LocalDate
 class ItemViewModel(application: Application) : AndroidViewModel(application) {
     private val context: Context = application.applicationContext
     private val operationMutex = Mutex()
-
-    private var dao: ItemDao = AppDatabase.get(context).itemDao()
-    private var observerJob: Job? = null
+    private val dao: ItemDao = AppDatabase.get(context).itemDao()
 
     private val _items = MutableStateFlow<List<Item>>(emptyList())
     val items: StateFlow<List<Item>> = _items.asStateFlow()
@@ -44,24 +40,10 @@ class ItemViewModel(application: Application) : AndroidViewModel(application) {
     val message: StateFlow<String?> = _message.asStateFlow()
 
     init {
-        startObserving()
-    }
-
-    private fun startObserving() {
-        observerJob = dao.observeAll()
+        dao.observeAll()
             .onEach { _items.value = it }
             .catch { e -> _message.value = "Could not read items: ${e.message ?: "unknown error"}" }
             .launchIn(viewModelScope)
-    }
-
-    private suspend fun pauseObserving() {
-        observerJob?.cancelAndJoin()
-        observerJob = null
-    }
-
-    private fun reopenDatabase() {
-        dao = AppDatabase.get(context).itemDao()
-        startObserving()
     }
 
     fun addItem(title: String, startDate: LocalDate) {
@@ -92,21 +74,15 @@ class ItemViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun exportDatabase(uri: Uri) {
+    fun exportItems(uri: Uri) {
         viewModelScope.launch {
             if (!_busy.compareAndSet(false, true)) return@launch
             try {
-                operationMutex.withLock {
-                    pauseObserving()
-                    try {
-                        checkpointDatabase()
-                        AppDatabase.closeAndClear()
-                        copyDatabaseToUri(uri)
-                    } finally {
-                        reopenDatabase()
-                    }
+                val csv = operationMutex.withLock {
+                    CsvSerializer.encode(dao.snapshotAll())
                 }
-                _message.value = "Database exported"
+                writeTextToUri(uri, csv)
+                _message.value = "CSV exported"
             } catch (e: Exception) {
                 _message.value = "Export failed: ${e.message ?: "unknown error"}"
             } finally {
@@ -115,24 +91,17 @@ class ItemViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun importDatabase(uri: Uri) {
+    fun importItems(uri: Uri) {
         viewModelScope.launch {
             if (!_busy.compareAndSet(false, true)) return@launch
-            val tempFile = File.createTempFile("timesince-import", ".db", context.cacheDir)
+            val tempFile = File.createTempFile("timesince-import", ".csv", context.cacheDir)
             try {
+                copyUriToFile(uri, tempFile)
+                val imported = CsvSerializer.decode(tempFile.readText(Charsets.UTF_8))
                 operationMutex.withLock {
-                    copyUriToFile(uri, tempFile)
-                    validateDatabaseFile(tempFile)
-
-                    pauseObserving()
-                    try {
-                        AppDatabase.closeAndClear()
-                        replaceDatabaseWith(tempFile)
-                    } finally {
-                        reopenDatabase()
-                    }
+                    dao.replaceAll(imported)
                 }
-                _message.value = "Database imported"
+                _message.value = "CSV imported"
             } catch (e: Exception) {
                 _message.value = "Import failed: ${e.message ?: "unknown error"}"
             } finally {
@@ -146,27 +115,10 @@ class ItemViewModel(application: Application) : AndroidViewModel(application) {
         _message.value = null
     }
 
-    private fun checkpointDatabase() {
-        val file = context.getDatabasePath(AppDatabase.DATABASE_NAME)
-        if (!file.exists()) return
-        val database = SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
-        try {
-            database.rawQuery("PRAGMA wal_checkpoint(TRUNCATE)", null).use { cursor ->
-                cursor.moveToFirst()
-            }
-        } finally {
-            database.close()
-        }
-    }
-
-    private suspend fun copyDatabaseToUri(uri: Uri) = withContext(Dispatchers.IO) {
-        val source = context.getDatabasePath(AppDatabase.DATABASE_NAME)
-        if (!source.exists()) throw IOException("Database file not found")
+    private suspend fun writeTextToUri(uri: Uri, text: String) = withContext(Dispatchers.IO) {
         val output = context.contentResolver.openOutputStream(uri)
             ?: throw IOException("Could not open destination")
-        output.use { out ->
-            source.inputStream().use { input -> input.copyTo(out) }
-        }
+        output.use { it.write(text.toByteArray(Charsets.UTF_8)) }
     }
 
     private suspend fun copyUriToFile(uri: Uri, target: File) = withContext(Dispatchers.IO) {
@@ -174,55 +126,6 @@ class ItemViewModel(application: Application) : AndroidViewModel(application) {
             ?: throw IOException("Could not open selected file")
         input.use { stream ->
             FileOutputStream(target).use { output -> stream.copyTo(output) }
-        }
-    }
-
-    private fun validateDatabaseFile(file: File) {
-        if (!file.exists() || file.length() == 0L) throw IOException("Selected file is empty")
-
-        val database = SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
-        try {
-            val version = database.rawQuery("PRAGMA user_version", null).use { cursor ->
-                if (cursor.moveToFirst()) cursor.getInt(0) else -1
-            }
-            if (version != AppDatabase.DATABASE_VERSION) {
-                throw IllegalArgumentException("unsupported database version: $version")
-            }
-
-            val columns = mutableSetOf<String>()
-            database.rawQuery("PRAGMA table_info(items)", null).use { cursor ->
-                val nameIndex = cursor.getColumnIndexOrThrow("name")
-                while (cursor.moveToNext()) {
-                    columns.add(cursor.getString(nameIndex))
-                }
-            }
-            val required = setOf("id", "title", "startDateEpochDay")
-            if (!columns.containsAll(required)) {
-                throw IllegalArgumentException("not a TimeSince database")
-            }
-        } finally {
-            database.close()
-        }
-    }
-
-    private suspend fun replaceDatabaseWith(source: File) = withContext(Dispatchers.IO) {
-        val target = context.getDatabasePath(AppDatabase.DATABASE_NAME)
-        target.parentFile?.mkdirs()
-
-        val staging = File(target.parentFile, "${target.name}.new")
-        try {
-            source.copyTo(staging, overwrite = true)
-            File("${target.path}-wal").delete()
-            File("${target.path}-shm").delete()
-            File("${target.path}-journal").delete()
-            if (target.exists() && !target.delete()) {
-                throw IOException("Could not remove existing database")
-            }
-            if (!staging.renameTo(target)) {
-                staging.copyTo(target, overwrite = true)
-            }
-        } finally {
-            staging.delete()
         }
     }
 }

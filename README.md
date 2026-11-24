@@ -19,10 +19,27 @@ Each item has a title and start date. The list shows the elapsed time in compact
 - Future start dates are rejected; new items default to today.
 - Data is stored locally on device using Room.
 - Top-left **`...`** menu:
-  - **Export** — save the whole database as a `.db` file via the system file picker.
-  - **Import** — replace the current data from a previously exported `.db` file (with confirmation).
+  - **Export** — save all items as a human-readable `.csv` file via the system file picker.
+  - **Import** — replace all current items from a previously exported `.csv` file (with confirmation and validation).
   - **About** — show the application name and version.
 - Supports system dark/light mode.
+
+## Export format
+
+Exports are UTF-8 CSV files named `timesince-YYYY-MM-DD.csv` by default:
+
+```csv
+title,startDate
+Anniversary,2020-06-15
+"Moved house, new city",2024-03-01
+Coffee,2026-11-24
+```
+
+- Header: `title,startDate`
+- Dates: ISO `YYYY-MM-DD`
+- Rows are ordered oldest start date first
+- Titles containing commas, quotes, or line breaks are CSV-escaped
+- Import replaces all existing items in one transaction; invalid files are rejected without changing data
 
 ## Tech stack
 
@@ -38,7 +55,7 @@ Each item has a title and start date. The list shows the elapsed time in compact
 app/src/main/java/com/example/timesince/
   data/                 # Room entity, DAO, database
   ui/                   # Compose screens/dialogs
-  util/                 # Elapsed time formatting
+  util/                 # Elapsed time formatting and CSV serialization
   ItemViewModel.kt
   MainActivity.kt
 ```

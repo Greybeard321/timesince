@@ -11,7 +11,6 @@ abstract class AppDatabase : RoomDatabase() {
 
     companion object {
         const val DATABASE_NAME = "timesince.db"
-        const val DATABASE_VERSION = 1
 
         @Volatile
         private var INSTANCE: AppDatabase? = null
@@ -24,12 +23,5 @@ abstract class AppDatabase : RoomDatabase() {
                     DATABASE_NAME,
                 ).build().also { INSTANCE = it }
             }
-
-        fun closeAndClear() {
-            synchronized(this) {
-                INSTANCE?.close()
-                INSTANCE = null
-            }
-        }
     }
 }

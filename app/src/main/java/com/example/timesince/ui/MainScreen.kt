@@ -227,7 +227,7 @@ fun MainScreen(
         AlertDialog(
             onDismissRequest = { showImportConfirm = false },
             title = { Text("Import database") },
-            text = { Text("This will replace all current items with the imported database. Continue?") },
+            text = { Text("This will replace all current items with the imported CSV file. Continue?") },
             confirmButton = {
                 TextButton(
                     onClick = {

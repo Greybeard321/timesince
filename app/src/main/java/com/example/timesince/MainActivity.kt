@@ -26,12 +26,12 @@ class MainActivity : ComponentActivity() {
 
         exportLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             if (result.resultCode == RESULT_OK) {
-                result.data?.data?.let { uri -> viewModel.exportDatabase(uri) }
+                result.data?.data?.let { uri -> viewModel.exportItems(uri) }
             }
         }
         importLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             if (result.resultCode == RESULT_OK) {
-                result.data?.data?.let { uri -> viewModel.importDatabase(uri) }
+                result.data?.data?.let { uri -> viewModel.importItems(uri) }
             }
         }
 
@@ -65,8 +65,8 @@ class MainActivity : ComponentActivity() {
     private fun launchExport() {
         val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
-            type = "application/octet-stream"
-            putExtra(Intent.EXTRA_TITLE, "timesince-${LocalDate.now()}.db")
+            type = "text/csv"
+            putExtra(Intent.EXTRA_TITLE, "timesince-${LocalDate.now()}.csv")
             addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
         }
         exportLauncher.launch(intent)
@@ -75,7 +75,7 @@ class MainActivity : ComponentActivity() {
     private fun launchImport() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
-            type = "*/*"
+            type = "text/*"
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         importLauncher.launch(intent)
