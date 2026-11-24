@@ -18,6 +18,10 @@ Each item has a title and start date. The list shows the elapsed time in compact
 - New items use **Cancel / Add**.
 - Future start dates are rejected; new items default to today.
 - Data is stored locally on device using Room.
+- Top-left **`...`** menu:
+  - **Export** — save the whole database as a `.db` file via the system file picker.
+  - **Import** — replace the current data from a previously exported `.db` file (with confirmation).
+  - **About** — show the application name and version.
 - Supports system dark/light mode.
 
 ## Tech stack

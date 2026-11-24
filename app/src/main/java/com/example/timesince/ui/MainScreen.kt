@@ -14,14 +14,22 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -49,18 +57,28 @@ import java.time.temporal.ChronoUnit
 @Composable
 fun MainScreen(
     items: List<Item>,
-    onAdd: (title: String, startDate: LocalDate) -> Unit,
-    onUpdate: (item: Item, title: String, startDate: LocalDate) -> Unit,
-    onDelete: (item: Item) -> Unit,
+    busy: Boolean,
+    message: String?,
+    versionName: String,
+    onAdd: (String, LocalDate) -> Unit,
+    onUpdate: (Item, String, LocalDate) -> Unit,
+    onDelete: (Item) -> Unit,
+    onExport: () -> Unit,
+    onImport: () -> Unit,
+    onMessageConsumed: () -> Unit,
 ) {
     var editingItemId by rememberSaveable { mutableStateOf<Long?>(null) }
     var creating by rememberSaveable { mutableStateOf(false) }
     var today by remember { mutableStateOf(LocalDate.now()) }
+    var menuExpanded by remember { mutableStateOf(false) }
+    var showAbout by rememberSaveable { mutableStateOf(false) }
+    var showImportConfirm by rememberSaveable { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
 
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
+            if (event == Lifecycle.Event.ON_START || event == Lifecycle.Event.ON_RESUME) {
                 today = LocalDate.now()
             }
         }
@@ -75,15 +93,62 @@ fun MainScreen(
         today = LocalDate.now()
     }
 
+    LaunchedEffect(message) {
+        if (message != null) {
+            snackbarHostState.showSnackbar(message)
+            onMessageConsumed()
+        }
+    }
+
     val editingItem = editingItemId?.let { id -> items.find { it.id == id } }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("TimeSince") }) },
+        topBar = {
+            TopAppBar(
+                title = { Text("TimeSince") },
+                navigationIcon = {
+                    Box {
+                        IconButton(onClick = { menuExpanded = true }) {
+                            Icon(Icons.Filled.MoreVert, contentDescription = "More options")
+                        }
+                        DropdownMenu(
+                            expanded = menuExpanded,
+                            onDismissRequest = { menuExpanded = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Import") },
+                                onClick = {
+                                    menuExpanded = false
+                                    showImportConfirm = true
+                                },
+                                enabled = !busy,
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Export") },
+                                onClick = {
+                                    menuExpanded = false
+                                    onExport()
+                                },
+                                enabled = !busy,
+                            )
+                            DropdownMenuItem(
+                                text = { Text("About") },
+                                onClick = {
+                                    menuExpanded = false
+                                    showAbout = true
+                                },
+                            )
+                        }
+                    }
+                },
+            )
+        },
         floatingActionButton = {
             FloatingActionButton(onClick = { creating = true }) {
                 Icon(Icons.Filled.Add, contentDescription = "Add item")
             }
         },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
         if (items.isEmpty()) {
             Box(
@@ -138,6 +203,41 @@ fun MainScreen(
             onDelete = {
                 onDelete(it)
                 editingItemId = null
+            },
+        )
+    }
+
+    if (showAbout) {
+        AlertDialog(
+            onDismissRequest = { showAbout = false },
+            title = { Text("About") },
+            text = {
+                Column {
+                    Text("TimeSince", style = MaterialTheme.typography.titleMedium)
+                    Text("Version $versionName")
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showAbout = false }) { Text("Close") }
+            },
+        )
+    }
+
+    if (showImportConfirm) {
+        AlertDialog(
+            onDismissRequest = { showImportConfirm = false },
+            title = { Text("Import database") },
+            text = { Text("This will replace all current items with the imported database. Continue?") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showImportConfirm = false
+                        onImport()
+                    },
+                ) { Text("Import") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showImportConfirm = false }) { Text("Cancel") }
             },
         )
     }

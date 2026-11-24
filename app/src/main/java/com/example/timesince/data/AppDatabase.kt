@@ -10,6 +10,9 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun itemDao(): ItemDao
 
     companion object {
+        const val DATABASE_NAME = "timesince.db"
+        const val DATABASE_VERSION = 1
+
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
@@ -18,8 +21,15 @@ abstract class AppDatabase : RoomDatabase() {
                 INSTANCE ?: Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
-                    "timesince.db",
+                    DATABASE_NAME,
                 ).build().also { INSTANCE = it }
             }
+
+        fun closeAndClear() {
+            synchronized(this) {
+                INSTANCE?.close()
+                INSTANCE = null
+            }
+        }
     }
 }
