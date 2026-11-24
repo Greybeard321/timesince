@@ -90,3 +90,7 @@ adb shell am start -n com.example.timesince/.MainActivity
 ## Specification
 
 See [SPEC.md](./SPEC.md) for the product behavior and acceptance criteria.
+
+## License
+
+Released into the public domain under [The Unlicense](./LICENSE).
